@@ -2,7 +2,7 @@
 -- documentation, see http://haskell.org/cabal/users-guide/
 
 name:                weighted-search
-version:             0.1.0.0
+version:             0.1.0.1
 synopsis:            A weighted nondeterministic search monad
 -- description:         
 homepage:            http://github.com/luqui/weighted-search
@@ -18,4 +18,4 @@ cabal-version:       >=1.8
 library
   exposed-modules:     Control.Monad.WeightedSearch
   -- other-modules:       
-  build-depends:       base ==4.5.*
+  build-depends:       base ==4.*
