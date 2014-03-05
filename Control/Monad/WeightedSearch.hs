@@ -1,3 +1,5 @@
+{-# LANGUAGE RankNTypes #-}
+
 -- | This is a nondeterminism monad which allows you to give computations
 -- weights, such that the lowest-weight computations will be returned first.
 -- This allows you to search infinite spaces productively, by guarding
@@ -23,75 +25,70 @@
 -- Weights must be strictly positive for this to be well-defined.
 
 module Control.Monad.WeightedSearch 
-    ( T, Weight(..), weight, toList )
+    ( Thread )
 where
 
 import Control.Applicative
 import Control.Monad (ap, MonadPlus(..))
 import Control.Arrow (first)
+import Control.Monad.Trans.State
 import Data.Ratio (Ratio)
-import Data.Foldable (Foldable, foldMap, toList)
+import Data.Foldable (Foldable, fold, foldMap, toList)
 import Data.Traversable (Traversable, sequenceA)
 import Data.Monoid (Monoid(..))
+import qualified Data.PQueue.Min as PQ
 
--- | Weighted nondeterminstic computations over the weight @w@.  
-data T w a
-    = Fail
-    | Yield a (T w a)
-    | Weight w (T w a)
 
--- | The class of positive weights. We need to know how to subtract.  Weights
--- must be strictly positive.
-class (Ord w) => Weight w where
-    difference :: w -> w -> w
 
--- | Take a positive weight and weight a computation with it.
-weight :: w -> T w a -> T w a
-weight = Weight
+newtype Thread r w a = Thread { runThread ::
+       r             -- fail
+    -> (a -> r -> r) -- return
+    -> (w -> r -> r) -- block
+    -> (r -> r -> r) -- fork 
+    -> r }
 
-instance Weight Int where difference = (-)
-instance Weight Integer where difference = (-)
-instance Weight Float where difference = (-)
-instance Weight Double where difference = (-)
-instance (Integral a) => Weight (Ratio a) where difference = (-)
+instance Functor (Thread r w) where
+  fmap f m = Thread (\fail ret block fork -> runThread m fail (ret . f) block fork)
 
-instance Functor (T w) where
-    fmap _ Fail = Fail
-    fmap f (Yield x w) = Yield (f x) (fmap f w)
-    fmap f (Weight a w) = Weight a (fmap f w)
+instance Monad (Thread r w) where
+  return x = Thread (\_ ret _ _ -> ret x)
+  m >>= f = Thread (\fail ret block fork ->
+    runThread m fail (\x -> runThread (f x) fail ret block fork) block fork)
 
-instance (Weight w) => Monad (T w) where
-    return x = Yield x Fail
-    Fail >>= _ = Fail
-    Yield x m >>= f = f x `mplus` (m >>= f)
-    Weight w m >>= f = Weight w (m >>= f)
+instance MonadPlus (Thread r w) where
+  mzero = Thread (\fail _ _ _ -> fail)
+  m `mplus` n = Thread (\fail ret block fork ->
+    fork (runThread m fail ret block fork) (runThread n fail ret block fork))
 
-instance (Weight w) => MonadPlus (T w) where
-    mzero = Fail
-    Fail `mplus` m = m
-    Yield x m `mplus` n = Yield x (m `mplus` n)
-    Weight w m `mplus` Fail = Weight w m
-    Weight w m `mplus` Yield x n = Yield x (Weight w m `mplus` n)
-    Weight w m `mplus` Weight w' n
-        = case compare w w' of
-            LT -> Weight w (m `mplus` Weight (difference w' w) n)
-            EQ -> Weight w (m `mplus` n)
-            GT -> Weight w' (Weight (difference w w') m `mplus` n)
+instance Applicative (Thread r w) where
+  pure = return
+  (<*>) = ap
 
-instance (Weight w) => Applicative (T w) where
-    pure = return
-    (<*>) = ap
+instance Alternative (Thread r w) where
+  empty = mzero
+  (<|>) = mplus
 
-instance (Weight w) => Alternative (T w) where
-    empty = mzero
-    (<|>) = mplus
 
-instance Foldable (T w) where
-    foldMap _ Fail = mempty
-    foldMap f (Yield a ms) = f a `mappend` foldMap f ms
-    foldMap f (Weight _ w) = foldMap f w
 
-instance Traversable (T w) where
-    sequenceA Fail = pure Fail
-    sequenceA (Yield x w) = Yield <$> x <*> sequenceA w
-    sequenceA (Weight a w) = Weight a <$> sequenceA w
+data Pri w a = Pri w a
+
+instance (Eq w) => Eq (Pri w a) where
+  Pri w _ == Pri w' _ = w == w'
+
+instance (Ord w) => Ord (Pri w a) where
+  compare (Pri w _) (Pri w' _) = compare w w'
+
+
+type Queue r w = PQ.MinQueue (Pri w (Thread r w r))
+
+sched :: (Ord w, Num w) => Queue r w -> [r]
+sched q
+  | Nothing <- qState = []
+  | Just (Pri w thread, q') <- qState = 
+    runThread thread (sched q')
+                     (\x thread' -> 
+                     (\w' thread' -> sched (PQ.insert (Pri (w+w') thread') q'))
+                     (\t thread' -> sched (PQ.insert (Pri w thread')
+                                           (PQ.insert (Pri w t) q')))
+  where
+  qState = PQ.minView q
