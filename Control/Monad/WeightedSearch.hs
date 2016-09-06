@@ -13,8 +13,8 @@
 -- >     go n = pure n <|> W.weight 1 (go $! n+1)
 -- > 
 -- > -- All finite lists, weighted by the length of the list
--- > finiteLists :: W.T Integer a -> W.T Integer a
--- > finiteLists = pure [] <|> W.weight 1 ((:) <$> w <*> finiteLists w)
+-- > finiteLists :: W.T Integer a -> W.T Integer [a]
+-- > finiteLists w = pure [] <|> W.weight 1 ((:) <$> w <*> finiteLists w)
 -- > 
 -- > -- A list of all finite lists of naturals
 -- > finiteListsOfNaturals = W.toList (finiteLists naturals)
